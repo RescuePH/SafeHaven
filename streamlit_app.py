@@ -1,6 +1,5 @@
 import streamlit as st
 import pandas as pd
-from streamlit_folium import st_folium
 import os
 
 # Page Configuration
@@ -22,7 +21,7 @@ st.markdown('<div class="main-header">🌊 Cabuyao Flood & Evacuation Community 
 st.markdown('<div class="sub-header">Live community flood monitoring and evacuation facility lookup for Cabuyao, Laguna</div>', unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# Data Loading
+# Data Loading & Preparation
 # -----------------------------------------------------------------------------
 DATA_DIR = "data"
 FLOOD_CSV = os.path.join(DATA_DIR, "processed_flood_reports.csv")
@@ -30,7 +29,6 @@ EVAC_CSV = os.path.join(DATA_DIR, "evacuation_centers.csv")
 
 @st.cache_data
 def load_data():
-    # Fallback default data if CSVs haven't been copied to /data yet
     if os.path.exists(FLOOD_CSV) and os.path.exists(EVAC_CSV):
         flood_df = pd.read_csv(FLOOD_CSV)
         evac_df = pd.read_csv(EVAC_CSV)
@@ -53,6 +51,14 @@ def load_data():
             'NearestEvacuationCenter': ['Marinig Gymnasium', 'Banlic Elementary School', 'Pulo Elementary School', 'Sala Barangay Hall', 'Cabuyao City Gymnasium'],
             'DistanceToEvac_km': [0.55, 0.38, 0.24, 0.45, 1.72]
         })
+    
+    # Ensure standard 'lat' and 'lon' columns exist for native map compatibility
+    for df in [flood_df, evac_df]:
+        if 'Latitude' in df.columns:
+            df['lat'] = df['Latitude']
+        if 'Longitude' in df.columns:
+            df['lon'] = df['Longitude']
+            
     return flood_df, evac_df
 
 flood_df, evac_df = load_data()
@@ -76,8 +82,8 @@ st.sidebar.subheader("📢 Submit Flood Report")
 with st.sidebar.form("report_form"):
     brgy = st.selectbox("Barangay", ["Marinig", "Banlic", "Pulo", "Sala", "Diezmo", "Baclaran", "Mamatid", "Niugan", "San Isidro"])
     w_level = st.number_input("Water Level (cm)", min_value=0, max_value=300, value=20)
-    lat = st.number_input("Latitude", value=14.2750, format="%.4f")
-    lon = st.number_input("Longitude", value=121.1250, format="%.4f")
+    lat_val = st.number_input("Latitude", value=14.2750, format="%.4f")
+    lon_val = st.number_input("Longitude", value=121.1250, format="%.4f")
     submitted = st.form_submit_button("Submit Community Report")
     
     if submitted:
@@ -99,36 +105,19 @@ st.markdown("---")
 
 tab1, tab2, tab3 = st.tabs(["🗺️ Live Map", "📊 Flood Reports Data", "🏠 Evacuation Facilities"])
 
-# TAB 1: GIS Map
+# TAB 1: Native Streamlit Map
 with tab1:
-    st.subheader("Interactive Map - Cabuyao, Laguna")
+    st.subheader("Cabuyao Flood Incident & Shelter Map")
+    st.info("Showing live community flood logs across Cabuyao, Laguna.")
     
-    # Center map on Cabuyao, Laguna
-    m = folium.Map(location=[14.2778, 14.1250], zoom_start=13, tiles="OpenStreetMap")
+    st.markdown("### 🔴 Flood Reports Location")
+    if not filtered_flood.empty:
+        st.map(filtered_flood[['lat', 'lon']])
+    else:
+        st.warning("No reports match the selected severity filter.")
 
-    # Add Flood Markers
-    color_map = {'Critical': 'red', 'Moderate': 'orange', 'Low': 'yellow', 'Safe': 'green'}
-    
-    for _, row in filtered_flood.iterrows():
-        folium.CircleMarker(
-            location=[row['Latitude'], row['Longitude']],
-            radius=8 + (row['WaterLevel_cm'] / 15),
-            popup=f"<b>Barangay:</b> {row['Barangay']}<br><b>Water Level:</b> {row['WaterLevel_cm']} cm<br><b>Severity:</b> {row['Severity']}<br><b>Nearest Shelter:</b> {row['NearestEvacuationCenter']}",
-            color=color_map.get(row['Severity'], 'blue'),
-            fill=True,
-            fill_color=color_map.get(row['Severity'], 'blue'),
-            fill_opacity=0.7
-        ).add_to(m)
-
-    # Add Evacuation Center Markers
-    for _, row in evac_df.iterrows():
-        folium.Marker(
-            location=[row['Latitude'], row['Longitude']],
-            popup=f"<b>Shelter:</b> {row['FacilityName']}<br><b>Capacity:</b> {row['CurrentLoad']}/{row['Capacity']}",
-            icon=folium.Icon(color="blue", icon="home", prefix="fa")
-        ).add_to(m)
-
-    st_folium(m, width=1100, height=500)
+    st.markdown("### 🏠 Evacuation Centers")
+    st.map(evac_df[['lat', 'lon']])
 
 # TAB 2: Flood Reports Table
 with tab2:
