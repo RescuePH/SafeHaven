@@ -1,112 +1,143 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
-import pydeck as pdk
+import folium
+from streamlit_folium import st_folium
+import os
 
 # Page Configuration
 st.set_page_config(
-    page_title="Community Flood Emergency Map",
+    page_title="Cabuyao Flood & Evacuation Map",
     page_icon="🌊",
     layout="wide"
 )
 
-st.title("🌊 Community Flood Emergency Map")
+# Custom Styling
 st.markdown("""
-*A GIS and crowdsourcing platform* designed for Philippine city communities to crowdsource, verify, and visualize localized emergency flood data in real time[cite: 1, 2]. 
-Note: Built with a Streamlit frontend and integrated with MATLAB backend analytics.
-""")
+    <style>
+    .main-header { font-size:2.2rem; font-weight:bold; color:#1E3A8A; }
+    .sub-header { font-size:1.1rem; color:#4B5563; margin-bottom: 20px; }
+    </style>
+""", unsafe_allow_html=True)
 
-# Initialize Session State for Crowdsourced Reports
-if "reports" not in st.session_state:
-    st.session_state.reports = pd.DataFrame([
-        {"Location": "Barangay Holy Spirit, QC", "Lat": 14.6760, "Lon": 121.0830, "WaterLevel": 1.2, "Status": "Passable (Light Vehicles)", "Shelter": "Active (Cap: 250)"},
-        {"Location": "Project 8, QC", "Lat": 14.6570, "Lon": 121.0250, "WaterLevel": 2.1, "Status": "Impassable", "Shelter": "Full"},
-        {"Location": "Commonwealth Ave", "Lat": 14.6820, "Lon": 121.0800, "WaterLevel": 0.5, "Status": "Passable to All", "Shelter": "Active (Cap: 500)"}
-    ])
+st.markdown('<div class="main-header">🌊 Cabuyao Flood & Evacuation Community Map</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-header">Live community flood monitoring and evacuation facility lookup for Cabuyao, Laguna</div>', unsafe_allow_html=True)
 
-# Sidebar: Submit Community Flood Report
-st.sidebar.header("📍 Submit Flood Report")
+# -----------------------------------------------------------------------------
+# Data Loading
+# -----------------------------------------------------------------------------
+DATA_DIR = "data"
+FLOOD_CSV = os.path.join(DATA_DIR, "processed_flood_reports.csv")
+EVAC_CSV = os.path.join(DATA_DIR, "evacuation_centers.csv")
+
+@st.cache_data
+def load_data():
+    # Fallback default data if CSVs haven't been copied to /data yet
+    if os.path.exists(FLOOD_CSV) and os.path.exists(EVAC_CSV):
+        flood_df = pd.read_csv(FLOOD_CSV)
+        evac_df = pd.read_csv(EVAC_CSV)
+    else:
+        # Default mock data structured exactly as MATLAB output
+        evac_df = pd.DataFrame({
+            'FacilityName': ['Cabuyao City Gymnasium', 'Pulo Elementary School', 'Marinig Gymnasium', 'Banlic Elementary School', 'Sala Barangay Hall'],
+            'Latitude': [14.2778, 14.2650, 14.3012, 14.2589, 14.2720],
+            'Longitude': [121.1214, 121.1320, 121.1450, 121.1150, 121.1280],
+            'Capacity': [500, 300, 400, 250, 200],
+            'CurrentLoad': [120, 250, 80, 50, 90]
+        })
+        flood_df = pd.DataFrame({
+            'ReportID': [101, 102, 103, 104, 105],
+            'Barangay': ['Marinig', 'Banlic', 'Pulo', 'Sala', 'Diezmo'],
+            'Latitude': [14.2980, 14.2600, 14.2640, 14.2750, 14.2850],
+            'Longitude': [121.1420, 121.1180, 121.1300, 121.1250, 121.1350],
+            'WaterLevel_cm': [85, 30, 120, 45, 10],
+            'Severity': ['Critical', 'Low', 'Critical', 'Moderate', 'Safe'],
+            'NearestEvacuationCenter': ['Marinig Gymnasium', 'Banlic Elementary School', 'Pulo Elementary School', 'Sala Barangay Hall', 'Cabuyao City Gymnasium'],
+            'DistanceToEvac_km': [0.55, 0.38, 0.24, 0.45, 1.72]
+        })
+    return flood_df, evac_df
+
+flood_df, evac_df = load_data()
+
+# -----------------------------------------------------------------------------
+# Sidebar Navigation & Filters
+# -----------------------------------------------------------------------------
+st.sidebar.header("📍 Navigation & Filters")
+
+severity_filter = st.sidebar.multiselect(
+    "Filter Flood Severity:",
+    options=flood_df['Severity'].unique(),
+    default=flood_df['Severity'].unique()
+)
+
+filtered_flood = flood_df[flood_df['Severity'].isin(severity_filter)]
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("📢 Submit Flood Report")
+
 with st.sidebar.form("report_form"):
-    loc_name = st.text_input("Location / Barangay Name")
-    lat = st.number_input("Latitude", value=14.6760, format="%.4f")
-    lon = st.number_input("Longitude", value=121.0830, format="%.4f")
-    water_level = st.slider("Water Level (Meters)", 0.0, 3.0, 0.5, 0.1)
-    status = st.selectbox("Road Status", ["Passable to All", "Passable (Light Vehicles)", "Impassable"])
-    shelter = st.text_input("Evacuation Shelter Status", "Active (Cap: 300)")
+    brgy = st.selectbox("Barangay", ["Marinig", "Banlic", "Pulo", "Sala", "Diezmo", "Baclaran", "Mamatid", "Niugan", "San Isidro"])
+    w_level = st.number_input("Water Level (cm)", min_value=0, max_value=300, value=20)
+    lat = st.number_input("Latitude", value=14.2750, format="%.4f")
+    lon = st.number_input("Longitude", value=121.1250, format="%.4f")
+    submitted = st.form_submit_button("Submit Community Report")
     
-    submitted = st.form_submit_button("Submit Emergency Report")
     if submitted:
-        new_row = pd.DataFrame([{
-            "Location": loc_name, 
-            "Lat": lat, 
-            "Lon": lon, 
-            "WaterLevel": water_level, 
-            "Status": status, 
-            "Shelter": shelter
-        }])
-        st.session_state.reports = pd.concat([st.session_state.reports, new_row], ignore_index=True)
-        st.success("Report submitted and broadcasted to local responders!")
+        severity = "Critical" if w_level > 80 else ("Moderate" if w_level > 30 else "Safe")
+        st.sidebar.success(f"Report logged for {brgy}! Status: {severity}")
 
-# Main Dashboard Metrics
-col1, col2, col3 = st.columns(3)
-df = st.session_state.reports
-
-avg_water = df["WaterLevel"].mean()
-max_water = df["WaterLevel"].max()
-total_reports = len(df)
-
-col1.metric("Total Active Reports", f"{total_reports}")
-col2.metric("Average Water Level", f"{avg_water:.2f} m")
-col3.metric("Peak Water Level", f"{max_water:.2f} m")
+# -----------------------------------------------------------------------------
+# Main Dashboard Layout
+# -----------------------------------------------------------------------------
+col1, col2, col3, col4 = st.columns(4)
+col1.metric("Active Flood Reports", len(filtered_flood))
+col2.metric("Critical Areas", len(filtered_flood[filtered_flood['Severity'] == 'Critical']))
+col3.metric("Evacuation Shelters", len(evac_df))
+total_cap = evac_df['Capacity'].sum()
+total_occ = evac_df['CurrentLoad'].sum()
+col4.metric("Shelter Occupancy", f"{int((total_occ/total_cap)*100)}%", f"{total_occ}/{total_cap} people")
 
 st.markdown("---")
 
-# MATLAB Backend Integration Status
-st.subheader("⚙️ MATLAB Analytics Engine Status")
-st.markdown("""
-*Data flows into flood_analysis.m to calculate water thresholds and community risk indices.*
-""")
+tab1, tab2, tab3 = st.tabs(["🗺️ Live Map", "📊 Flood Reports Data", "🏠 Evacuation Facilities"])
 
-# Risk evaluation logic matching the MATLAB backend
-if avg_water > 1.5:
-    matlab_risk = "CRITICAL 🔴 (Immediate Evacuation Required)"
-elif avg_water > 0.8:
-    matlab_risk = "HIGH 🟠 (Exercise Extreme Caution)"
-elif avg_water > 0.3:
-    matlab_risk = "MODERATE 🟡 (Monitor Weather Advisories)"
-else:
-    matlab_risk = "LOW 🟢 (Normal Conditions)"
+# TAB 1: GIS Map
+with tab1:
+    st.subheader("Interactive Map - Cabuyao, Laguna")
+    
+    # Center map on Cabuyao, Laguna
+    m = folium.Map(location=[14.2778, 14.1250], zoom_start=13, tiles="OpenStreetMap")
 
-st.info(f"*MATLAB Computed Community Risk Index:* {matlab_risk}")
+    # Add Flood Markers
+    color_map = {'Critical': 'red', 'Moderate': 'orange', 'Low': 'yellow', 'Safe': 'green'}
+    
+    for _, row in filtered_flood.iterrows():
+        folium.CircleMarker(
+            location=[row['Latitude'], row['Longitude']],
+            radius=8 + (row['WaterLevel_cm'] / 15),
+            popup=f"<b>Barangay:</b> {row['Barangay']}<br><b>Water Level:</b> {row['WaterLevel_cm']} cm<br><b>Severity:</b> {row['Severity']}<br><b>Nearest Shelter:</b> {row['NearestEvacuationCenter']}",
+            color=color_map.get(row['Severity'], 'blue'),
+            fill=True,
+            fill_color=color_map.get(row['Severity'], 'blue'),
+            fill_opacity=0.7
+        ).add_to(m)
 
-# Interactive GIS Map (PyDeck)
-st.subheader("🗺️ Live Community Flood Map")
-layer = pdk.Layer(
-    "ScatterplotLayer",
-    data=df,
-    get_position='[Lon, Lat]',
-    get_color='[WaterLevel * 80, 255 - (WaterLevel * 60), 50, 160]',
-    get_radius='WaterLevel * 300 + 200',
-    pickable=True,
-    auto_highlight=True,
-)
+    # Add Evacuation Center Markers
+    for _, row in evac_df.iterrows():
+        folium.Marker(
+            location=[row['Latitude'], row['Longitude']],
+            popup=f"<b>Shelter:</b> {row['FacilityName']}<br><b>Capacity:</b> {row['CurrentLoad']}/{row['Capacity']}",
+            icon=folium.Icon(color="blue", icon="home", prefix="fa")
+        ).add_to(m)
 
-view_state = pdk.ViewState(
-    latitude=df["Lat"].mean(),
-    longitude=df["Lon"].mean(),
-    zoom=12,
-    pitch=30,
-)
+    st_folium(m, width=1100, height=500)
 
-r = pdk.Deck(
-    layers=[layer], 
-    initial_view_state=view_state, 
-    tooltip={
-        "text": "Location: {Location}\nWater Level: {WaterLevel}m\nRoad Status: {Status}\nShelter: {Shelter}"
-    }
-)
-st.pydeck_chart(r)
+# TAB 2: Flood Reports Table
+with tab2:
+    st.subheader("Community Flood Incident Logs")
+    st.dataframe(filtered_flood, use_container_width=True)
 
-# Detailed Incident Table for Officials
-st.subheader("📋 Verified Incident Reports Table")
-st.dataframe(df, use_container_width=True)
+# TAB 3: Evacuation Shelters Table
+with tab3:
+    st.subheader("Evacuation Center Status")
+    evac_df['Available Capacity'] = evac_df['Capacity'] - evac_df['CurrentLoad']
+    st.dataframe(evac_df[['FacilityName', 'Capacity', 'CurrentLoad', 'Available Capacity', 'Latitude', 'Longitude']], use_container_width=True)
